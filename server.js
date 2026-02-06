@@ -5,7 +5,9 @@ const path = require("path");
 const cors = require("cors");
 
 const app = express();
-app.use(cors());
+app.use(cors({
+  origin: "*",
+}));
 const PORT = process.env.PORT || 3000;
 
 const TEST_DIR = path.join(__dirname, "test");
@@ -62,3 +64,4 @@ app.get("/result", (req, res) => {
 app.listen(PORT, "0.0.0.0", () => {
 	console.log(`🚀 Result server running on port ${PORT}`);
 });
+
