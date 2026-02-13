@@ -1,14 +1,14 @@
 /**
- * server.js
+ * server.js (single file)
  *
- * One-file distribution ✅
- * - Normal mode logic kept in startNormalServer()
- * - Project mode logic kept in startProjectServer()
- * - Entry point selects mode by flags:
- *    node server.js               -> normal (uses .mocharc.json)
- *    node server.js --project     -> project (runs test file in child process)
- *    node server.js --test        -> force "all passed" (works in both)
- *    node server.js --project --test -> project + force pass
+ * Modes:
+ *   node server.js                 -> NORMAL (reads .mocharc.json)
+ *   node server.js --project       -> PROJECT (runs current test in child process)
+ *   node server.js --test          -> force "all passed" (works in both)
+ *   node server.js --project --test -> project + force pass
+ *
+ * PROJECT MODE response includes test output:
+ *   test: { file, passed, exitCode, stdout, stderr, errorMessage }
  */
 
 const express = require("express");
@@ -17,7 +17,7 @@ const path = require("path");
 const { spawn } = require("child_process");
 
 // ----------------------------
-// Shared utilities
+// Shared config + flags
 // ----------------------------
 const PORT = process.env.PORT || 3000;
 const TEST_DIR = path.join(__dirname, "test");
@@ -26,15 +26,16 @@ const MOCHA_RC = path.join(__dirname, ".mocharc.json");
 const TEST_MODE = process.argv.includes("--test");
 const PROJECT_MODE = process.argv.includes("--project");
 
+// ----------------------------
+// Shared utilities
+// ----------------------------
 function attachCommonMiddleware(app) {
-  // CORS (open)
   app.use((req, res, next) => {
     res.header("Access-Control-Allow-Origin", "*");
     res.header("Access-Control-Allow-Headers", "*");
     next();
   });
 
-  // simple log
   app.use((req, res, next) => {
     console.log("➡️", req.method, req.url);
     next();
@@ -68,27 +69,40 @@ function addStats(payload) {
     lockedCount,
     passedPercent,
     lockedPercent,
-    // keep your original "progress" field as "passed %"
+    // progress = passed %
     progress: total > 0 ? passedPercent : 0,
   };
 }
 
+function truncate(str, max = 6000) {
+  if (!str) return "";
+  return str.length > max ? str.slice(0, max) + `\n... (truncated ${str.length - max} chars)` : str;
+}
+
+function firstUsefulLine(text) {
+  if (!text) return "";
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  return lines[0] || "";
+}
+
 /**
- * Encapsulated test runner (child process)
- * Runs a SINGLE test file using `npx mocha <file>`.
- * - returns { passed: boolean, exitCode, stdout, stderr }
+ * Encapsulated Mocha runner (child process)
+ * - Uses `npx mocha <testFile>`
+ * - Returns stdout/stderr/exit code to include in JSON
  */
 function runMochaInChild(testFileAbsPath) {
   return new Promise((resolve) => {
-    const proc = spawn(
-      process.platform === "win32" ? "npx.cmd" : "npx",
-      ["mocha", testFileAbsPath],
-      {
-        cwd: __dirname,
-        env: process.env,
-        stdio: ["ignore", "pipe", "pipe"],
-      }
-    );
+    const cmd = process.platform === "win32" ? "npx.cmd" : "npx";
+    const args = ["mocha", testFileAbsPath];
+
+    const proc = spawn(cmd, args, {
+      cwd: __dirname,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
 
     let stdout = "";
     let stderr = "";
@@ -110,14 +124,14 @@ function runMochaInChild(testFileAbsPath) {
         passed: false,
         exitCode: 1,
         stdout,
-        stderr: (stderr ? stderr + "\n" : "") + err.message,
+        stderr: (stderr ? stderr + "\n" : "") + String(err?.message || err),
       });
     });
   });
 }
 
 // ----------------------------
-// Normal mode implementation
+// NORMAL MODE implementation
 // ----------------------------
 function startNormalServer() {
   const app = express();
@@ -134,7 +148,7 @@ function startNormalServer() {
       throw new Error('Invalid ".mocharc.json": expected { "spec": ["./test/X.test.js"] }.');
     }
 
-    const currentFile = path.basename(currentSpec); // e.g. "20.test.js" or "1.1.test.js"
+    const currentFile = path.basename(currentSpec);
     const currentStep = parseFloat(currentFile);
 
     const tests = getAllTests();
@@ -188,18 +202,12 @@ function startNormalServer() {
 }
 
 // ----------------------------
-// Project mode implementation
+// PROJECT MODE implementation
 // ----------------------------
 function startProjectServer() {
   const app = express();
   attachCommonMiddleware(app);
 
-  /**
-   * In project mode:
-   * - no .mocharc.json needed
-   * - current = first test file (sorted)
-   * - runs current test in child process to decide passed[]
-   */
   async function getResultProjectMode() {
     const tests = getAllTests();
 
@@ -210,20 +218,37 @@ function startProjectServer() {
         locked: [],
         total: 0,
         next: null,
+        test: {
+          file: null,
+          passed: false,
+          exitCode: null,
+          stdout: "",
+          stderr: "",
+          errorMessage: "No test files found in /test",
+        },
       });
     }
 
     const currentFile = tests[0].file;
     const nextFile = tests.length > 1 ? tests[1].file : null;
 
+    // --test : force pass but keep consistent payload
     if (TEST_MODE) {
-      // Force pass (no execution)
       return addStats({
         current: currentFile,
-        passed: tests.map((t) => t.file), // treat all as passed in test mode
+        passed: tests.map((t) => t.file),
         locked: [],
         total: tests.length,
         next: null,
+        test: {
+          file: currentFile,
+          passed: true,
+          exitCode: 0,
+          stdout: "",
+          stderr: "",
+          errorMessage: "",
+          forced: true,
+        },
       });
     }
 
@@ -231,16 +256,26 @@ function startProjectServer() {
     const abs = path.join(TEST_DIR, currentFile);
     const run = await runMochaInChild(abs);
 
+    const stdout = truncate(run.stdout);
+    const stderr = truncate(run.stderr);
+
     return addStats({
       current: currentFile,
       passed: run.passed ? [currentFile] : [],
-      locked: [], // you can extend this later for unlocking logic
+      locked: [],
       total: tests.length,
-      next: run.passed ? nextFile : currentFile, // if failed, "next" stays current
-      // Optional debug fields (remove if you don't want them exposed)
-      // mochaExitCode: run.exitCode,
-      // mochaStdout: run.stdout,
-      // mochaStderr: run.stderr,
+      next: run.passed ? nextFile : currentFile,
+
+      // ✅ include test output/error info for the frontend
+      test: {
+        file: currentFile,
+        passed: run.passed,
+        exitCode: run.exitCode,
+        stdout,
+        stderr,
+        // helpful single-line message (your test throws "Cannot connect to psql..." when DB down)
+        errorMessage: run.passed ? "" : firstUsefulLine(stderr) || firstUsefulLine(stdout) || "Test failed",
+      },
     });
   }
 
