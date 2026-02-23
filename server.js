@@ -15,7 +15,7 @@ const express = require("express");
 const fs = require("fs");
 const path = require("path");
 const { spawn } = require("child_process");
-import { execSync } from "node:child_process";
+const { execSync } = require("child_process");
 
 // ----------------------------
 // Shared config + flags
@@ -352,6 +352,7 @@ function startProjectServer() {
 // ----------------------------
 if (PROJECT_MODE) startProjectServer();
 else startNormalServer();
+
 
 
 
