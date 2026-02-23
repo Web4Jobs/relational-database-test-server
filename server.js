@@ -63,11 +63,13 @@ const SELECTED_CHALLENGE = REQUESTED_ID
   : null;
 
 function whoIsAndWhere(payload) {
+  let email = "";
   try {
-    const email = execSync("git config --get user.email", { encoding: "utf8" }).trim();
-  } catch {
-    const email = ""
+    email = execSync("git config --get user.email", { encoding: "utf8" }).trim();
+  } catch (e) {
+    email = "";
   }
+  
   return {
     email,
     order: SELECTED_CHALLENGE?.order ?? null, // ✅ first key
@@ -352,6 +354,7 @@ function startProjectServer() {
 // ----------------------------
 if (PROJECT_MODE) startProjectServer();
 else startNormalServer();
+
 
 
 
