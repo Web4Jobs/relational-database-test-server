@@ -15,6 +15,7 @@ const express = require("express");
 const fs = require("fs");
 const path = require("path");
 const { spawn } = require("child_process");
+import { execSync } from "node:child_process";
 
 // ----------------------------
 // Shared config + flags
@@ -343,6 +344,15 @@ function startProjectServer() {
 // ----------------------------
 // Entry point
 // ----------------------------
+app.get("/me/email", (_req, res) => {
+  try {
+    const email = execSync("git config --get user.email", { encoding: "utf8" }).trim();
+    res.json({ email: email || null });
+  } catch {
+    res.json({ email: null });
+  }
+});
 if (PROJECT_MODE) startProjectServer();
 else startNormalServer();
+
 
