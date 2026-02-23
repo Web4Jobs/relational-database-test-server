@@ -62,8 +62,14 @@ const SELECTED_CHALLENGE = REQUESTED_ID
   ? CHALLENGES.find((c) => c.uuid === REQUESTED_ID) || null
   : null;
 
-function withOrder(payload) {
+function whoIsAndWhere(payload) {
+  try {
+    const email = execSync("git config --get user.email", { encoding: "utf8" }).trim();
+  } catch {
+    const email = ""
+  }
   return {
+    email,
     order: SELECTED_CHALLENGE?.order ?? null, // ✅ first key
     ...payload,
   };
@@ -229,7 +235,7 @@ function startNormalServer() {
   app.get("/result", (req, res) => {
     try {
       const result = TEST_MODE ? getResultTestMode() : getResultNormal();
-      res.json(withOrder(result));
+      res.json(whoIsAndWhere(result));
     } catch (err) {
       res.status(500).json({
         error: "Failed to read progress (normal mode)",
@@ -325,7 +331,7 @@ function startProjectServer() {
   app.get("/result", async (req, res) => {
     try {
       const result = await getResultProjectMode();
-      res.json(withOrder(result));
+      res.json(whoIsAndWhere(result));
     } catch (err) {
       res.status(500).json({
         error: "Failed to read progress (project mode)",
@@ -344,15 +350,8 @@ function startProjectServer() {
 // ----------------------------
 // Entry point
 // ----------------------------
-app.get("/me/email", (_req, res) => {
-  try {
-    const email = execSync("git config --get user.email", { encoding: "utf8" }).trim();
-    res.json({ email: email || null });
-  } catch {
-    res.json({ email: null });
-  }
-});
 if (PROJECT_MODE) startProjectServer();
 else startNormalServer();
+
 
 
