@@ -27,6 +27,48 @@ const TEST_MODE = process.argv.includes("--test");
 const PROJECT_MODE = process.argv.includes("--project");
 
 // ----------------------------
+// Challenges
+// ----------------------------
+
+function getFlagValue(flag) {
+  const i = process.argv.indexOf(flag);
+  if (i === -1) return null;
+  const v = process.argv[i + 1];
+  if (!v || v.startsWith("--")) return null;
+  return v;
+}
+
+const REQUESTED_ID = getFlagValue("--id");
+
+const CHALLENGES = [
+  { name: 'Learn Bash by Building a Boilerplate', uuid: 'a1B', order: 1 },
+  { name: 'Learn Relational Databases by Building a Mario Database', uuid: 'c7D', order: 2 },
+  { name: 'Celestial Bodies Database', uuid: 'e3F', order: 3 },
+  { name: 'Learn Bash Scripting by Building Five Programs', uuid: 'g9H', order: 4 },
+  { name: 'Learn SQL by Building a Student Database: Part 1', uuid: 'i2J', order: 5 },
+  { name: 'Learn SQL by Building a Student Database: Part 2', uuid: 'k6L', order: 6 },
+  { name: 'World Cup Database', uuid: 'm8N', order: 7 },
+  { name: 'Learn Advanced Bash by Building a Kitty Ipsum Translator', uuid: 'p4Q', order: 8 },
+  { name: 'Learn Bash and SQL by Building a Bike Rental Shop', uuid: 'r1S', order: 9 },
+  { name: 'Salon Appointment Scheduler', uuid: 't5U', order: 10 },
+  { name: 'Learn Nano by Building a Castle', uuid: 'v7W', order: 11 },
+  { name: 'Learn Git by Building an SQL Reference Object', uuid: 'x2Y', order: 12 },
+  { name: 'Periodic Table Database', uuid: 'z9A', order: 13 },
+  { name: 'Number Guessing Game', uuid: 'b3C', order: 14 }
+];
+
+const SELECTED_CHALLENGE = REQUESTED_ID
+  ? CHALLENGES.find((c) => c.uuid === REQUESTED_ID) || null
+  : null;
+
+function withOrder(payload) {
+  return {
+    order: SELECTED_CHALLENGE?.order ?? null, // ✅ first key
+    ...payload,
+  };
+}
+
+// ----------------------------
 // Shared utilities
 // ----------------------------
 function attachCommonMiddleware(app) {
@@ -186,7 +228,7 @@ function startNormalServer() {
   app.get("/result", (req, res) => {
     try {
       const result = TEST_MODE ? getResultTestMode() : getResultNormal();
-      res.json(result);
+      res.json(withOrder(result));
     } catch (err) {
       res.status(500).json({
         error: "Failed to read progress (normal mode)",
@@ -282,7 +324,7 @@ function startProjectServer() {
   app.get("/result", async (req, res) => {
     try {
       const result = await getResultProjectMode();
-      res.json(result);
+      res.json(withOrder(result));
     } catch (err) {
       res.status(500).json({
         error: "Failed to read progress (project mode)",
@@ -303,3 +345,4 @@ function startProjectServer() {
 // ----------------------------
 if (PROJECT_MODE) startProjectServer();
 else startNormalServer();
+
