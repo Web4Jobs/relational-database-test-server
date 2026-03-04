@@ -26,6 +26,7 @@ const MOCHA_RC = path.join(__dirname, ".mocharc.json");
 
 const TEST_MODE = process.argv.includes("--test");
 const PROJECT_MODE = process.argv.includes("--project");
+const TEST_MAIL = process.argv.includes("--testmail");
 
 // ----------------------------
 // Challenges
@@ -64,7 +65,7 @@ const SELECTED_CHALLENGE = REQUESTED_ID
 
 function whoIsAndWhere(payload) {
   let email = "";
-  if (TEST_MODE) {
+  if (TEST_MAIL) {
     email = "fagroudfatimazahra0512@gmail.com";
   } else {
     try {
@@ -358,6 +359,7 @@ function startProjectServer() {
 // ----------------------------
 if (PROJECT_MODE) startProjectServer();
 else startNormalServer();
+
 
 
 
