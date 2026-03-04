@@ -102,11 +102,15 @@ function attachCommonMiddleware(app) {
 function getAllTests() {
   if (!fs.existsSync(TEST_DIR)) return [];
 
-  return fs
+  const tests = fs
     .readdirSync(TEST_DIR)
     .filter((f) => /^\d+(\.\d+)?\.test\.js$/.test(f))
     .map((f) => ({ file: f, step: parseFloat(f) }))
     .sort((a, b) => a.step - b.step);
+  
+  tests.pop()
+
+  return tests;
 }
 
 function addStats(payload) {
@@ -221,7 +225,7 @@ function startNormalServer() {
       passed,
       locked,
       total: tests.length,
-      next: locked[0] || null,
+      next: locked[0] || "Congrats on completing this Challenge, no more test",
     });
   }
 
@@ -359,6 +363,7 @@ function startProjectServer() {
 // ----------------------------
 if (PROJECT_MODE) startProjectServer();
 else startNormalServer();
+
 
 
 
