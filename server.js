@@ -64,15 +64,19 @@ const SELECTED_CHALLENGE = REQUESTED_ID
 
 function whoIsAndWhere(payload) {
   let email = "";
-  try {
-    email = execSync("git config --get user.email", { encoding: "utf8" }).trim();
-  } catch (e) {
-    email = "";
+  if (TEST_MODE) {
+    email = "fagroudfatimazahra0512@gmail.com";
+  } else {
+    try {
+      email = execSync("git config --get user.email", { encoding: "utf8" }).trim();
+    } catch (e) {
+      email = "";
+    }
   }
-  
+
   return {
     email,
-    order: SELECTED_CHALLENGE?.order ?? null, // ✅ first key
+    order: SELECTED_CHALLENGE?.order ?? null,
     ...payload,
   };
 }
@@ -354,6 +358,7 @@ function startProjectServer() {
 // ----------------------------
 if (PROJECT_MODE) startProjectServer();
 else startNormalServer();
+
 
 
 
