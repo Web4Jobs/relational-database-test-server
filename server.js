@@ -107,6 +107,8 @@ function getAllTests() {
     .filter((f) => /^\d+(\.\d+)?\.test\.js$/.test(f))
     .map((f) => ({ file: f, step: parseFloat(f) }))
     .sort((a, b) => a.step - b.step);
+
+  if (PROJECT_MODE) return tests
   
   tests.pop()
 
@@ -363,6 +365,7 @@ function startProjectServer() {
 // ----------------------------
 if (PROJECT_MODE) startProjectServer();
 else startNormalServer();
+
 
 
 
