@@ -7,15 +7,18 @@
  *   node server.js --test          -> force "all passed" (works in both)
  *   node server.js --project --test -> project + force pass
  *
- * PROJECT MODE response includes test output:
- *   test: { file, passed, exitCode, stdout, stderr, errorMessage }
+ * PROJECT MODE:
+ *   - first /result call creates result.json with state: "running"
+ *   - responds immediately with that file content
+ *   - mocha continues in background
+ *   - when finished, result.json is replaced with final payload
+ *   - later /result calls just serve result.json
  */
 
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
-const { spawn } = require("child_process");
-const { execSync } = require("child_process");
+const { spawn, execSync } = require("child_process");
 
 // ----------------------------
 // Shared config + flags
@@ -32,7 +35,6 @@ const TEST_MAIL = process.argv.includes("--testmail");
 // ----------------------------
 // Challenges
 // ----------------------------
-
 function getFlagValue(flag) {
   const i = process.argv.indexOf(flag);
   if (i === -1) return null;
@@ -57,7 +59,7 @@ const CHALLENGES = [
   { name: "Learn Nano by Building a Castle", uuid: "v7W", order: 11 },
   { name: "Learn Git by Building an SQL Reference Object", uuid: "x2Y", order: 12 },
   { name: "Periodic Table Database", uuid: "z9A", order: 13 },
-  { name: "Number Guessing Game", uuid: "b3C", order: 14 },
+  { name: "Number Guessing Game", uuid: "b3C", order: 14 }
 ];
 
 const SELECTED_CHALLENGE = REQUESTED_ID
@@ -99,7 +101,6 @@ function attachCommonMiddleware(app) {
   });
 }
 
-// supports: 1.test.js, 20.test.js, 1.1.test.js, 10.25.test.js
 function getAllTests() {
   if (!fs.existsSync(TEST_DIR)) return [];
 
@@ -112,7 +113,6 @@ function getAllTests() {
   if (PROJECT_MODE) return tests;
 
   tests.pop();
-
   return tests;
 }
 
@@ -138,9 +138,7 @@ function addStats(payload) {
 
 function truncate(str, max = 6000) {
   if (!str) return "";
-  return str.length > max
-    ? str.slice(0, max) + `\n... (truncated ${str.length - max} chars)`
-    : str;
+  return str.length > max ? str.slice(0, max) + `\n... (truncated ${str.length - max} chars)` : str;
 }
 
 function firstUsefulLine(text) {
@@ -153,15 +151,19 @@ function firstUsefulLine(text) {
 }
 
 function writeResultFile(data) {
-  fs.writeFileSync(RESULT_FILE, JSON.stringify(data, null, 2), "utf8");
+  try {
+    fs.writeFileSync(RESULT_FILE, JSON.stringify(data, null, 2), "utf8");
+  } catch (err) {
+    console.error("Failed to write result.json:", err.message);
+  }
 }
 
 function readResultFile() {
-  if (!fs.existsSync(RESULT_FILE)) return null;
-
   try {
+    if (!fs.existsSync(RESULT_FILE)) return null;
     return JSON.parse(fs.readFileSync(RESULT_FILE, "utf8"));
-  } catch {
+  } catch (err) {
+    console.error("Failed to read result.json:", err.message);
     return null;
   }
 }
@@ -174,11 +176,74 @@ function removeResultFile() {
   }
 }
 
-/**
- * Encapsulated Mocha runner (child process)
- * - Uses `npx mocha <testFile>`
- * - Returns stdout/stderr/exit code to include in JSON
- */
+function makeRunningPayload(currentFile, tests, nextFile) {
+  return whoIsAndWhere(
+    addStats({
+      state: "running",
+      current: currentFile,
+      passed: [],
+      locked: [],
+      total: tests.length,
+      next: currentFile,
+      test: {
+        file: currentFile,
+        passed: false,
+        exitCode: null,
+        stdout: "",
+        stderr: "",
+        errorMessage: "Test is still running",
+      },
+    })
+  );
+}
+
+function makeFinalPayload({ currentFile, tests, nextFile, run }) {
+  const stdout = truncate(run.stdout);
+  const stderr = truncate(run.stderr);
+
+  return whoIsAndWhere(
+    addStats({
+      state: "completed",
+      current: currentFile,
+      passed: run.passed ? [currentFile] : [],
+      locked: [],
+      total: tests.length,
+      next: run.passed ? nextFile : currentFile,
+      test: {
+        file: currentFile,
+        passed: run.passed,
+        exitCode: run.exitCode,
+        stdout,
+        stderr,
+        errorMessage: run.passed
+          ? ""
+          : firstUsefulLine(stderr) || firstUsefulLine(stdout) || "Test failed",
+      },
+    })
+  );
+}
+
+function makeFailedPayload(currentFile, tests, err) {
+  return whoIsAndWhere(
+    addStats({
+      state: "failed",
+      current: currentFile,
+      passed: [],
+      locked: [],
+      total: tests.length,
+      next: currentFile,
+      test: {
+        file: currentFile,
+        passed: false,
+        exitCode: 1,
+        stdout: "",
+        stderr: String(err?.stack || err?.message || err || "Unknown error"),
+        errorMessage: String(err?.message || err || "Unknown error"),
+      },
+    })
+  );
+}
+
 function runMochaInChild(testFileAbsPath) {
   return new Promise((resolve) => {
     const cmd = process.platform === "win32" ? "npx.cmd" : "npx";
@@ -193,8 +258,13 @@ function runMochaInChild(testFileAbsPath) {
     let stdout = "";
     let stderr = "";
 
-    proc.stdout.on("data", (d) => (stdout += d.toString()));
-    proc.stderr.on("data", (d) => (stderr += d.toString()));
+    proc.stdout.on("data", (d) => {
+      stdout += d.toString();
+    });
+
+    proc.stderr.on("data", (d) => {
+      stderr += d.toString();
+    });
 
     proc.on("close", (code) => {
       resolve({
@@ -246,14 +316,16 @@ function startNormalServer() {
       if (t.step > currentStep) locked.push(t.file);
     }
 
-    return addStats({
-      state: "completed",
-      current: currentFile,
-      passed,
-      locked,
-      total: tests.length,
-      next: locked[0] || "Congrats on completing this Challenge, no more test",
-    });
+    return whoIsAndWhere(
+      addStats({
+        state: "completed",
+        current: currentFile,
+        passed,
+        locked,
+        total: tests.length,
+        next: locked[0] || "Congrats on completing this Challenge, no more test",
+      })
+    );
   }
 
   function getResultTestMode() {
@@ -261,20 +333,22 @@ function startNormalServer() {
     const passed = tests.map((t) => t.file);
     const currentFile = tests.length ? tests[tests.length - 1].file : null;
 
-    return addStats({
-      state: "completed",
-      current: currentFile,
-      passed,
-      locked: [],
-      total: tests.length,
-      next: null,
-    });
+    return whoIsAndWhere(
+      addStats({
+        state: "completed",
+        current: currentFile,
+        passed,
+        locked: [],
+        total: tests.length,
+        next: null,
+      })
+    );
   }
 
   app.get("/result", (req, res) => {
     try {
       const result = TEST_MODE ? getResultTestMode() : getResultNormal();
-      res.json(whoIsAndWhere(result));
+      res.json(result);
     } catch (err) {
       res.status(500).json({
         error: "Failed to read progress (normal mode)",
@@ -296,176 +370,135 @@ function startProjectServer() {
   const app = express();
   attachCommonMiddleware(app);
 
-  let isRunning = false;
+  let runPromise = null;
 
-  async function getResultProjectMode() {
+  async function startBackgroundRun() {
     const tests = getAllTests();
 
     if (tests.length === 0) {
-      return addStats({
-        state: "completed",
-        current: null,
-        passed: [],
-        locked: [],
-        total: 0,
-        next: null,
-        test: {
-          file: null,
-          passed: false,
-          exitCode: null,
-          stdout: "",
-          stderr: "",
-          errorMessage: "No test files found in /test",
-        },
-      });
+      writeResultFile(
+        whoIsAndWhere(
+          addStats({
+            state: "failed",
+            current: null,
+            passed: [],
+            locked: [],
+            total: 0,
+            next: null,
+            test: {
+              file: null,
+              passed: false,
+              exitCode: null,
+              stdout: "",
+              stderr: "",
+              errorMessage: "No test files found in /test",
+            },
+          })
+        )
+      );
+      return;
     }
 
     const currentFile = tests[0].file;
     const nextFile = tests.length > 1 ? tests[1].file : null;
 
     if (TEST_MODE) {
-      return addStats({
-        state: "completed",
-        current: currentFile,
-        passed: tests.map((t) => t.file),
-        locked: [],
-        total: tests.length,
-        next: null,
-        test: {
-          file: currentFile,
-          passed: true,
-          exitCode: 0,
-          stdout: "",
-          stderr: "",
-          errorMessage: "",
-          forced: true,
-        },
-      });
+      writeResultFile(
+        whoIsAndWhere(
+          addStats({
+            state: "completed",
+            current: currentFile,
+            passed: tests.map((t) => t.file),
+            locked: [],
+            total: tests.length,
+            next: null,
+            test: {
+              file: currentFile,
+              passed: true,
+              exitCode: 0,
+              stdout: "",
+              stderr: "",
+              errorMessage: "",
+              forced: true,
+            },
+          })
+        )
+      );
+      return;
     }
 
-    const abs = path.join(TEST_DIR, currentFile);
-    const run = await runMochaInChild(abs);
-
-    const stdout = truncate(run.stdout);
-    const stderr = truncate(run.stderr);
-
-    return addStats({
-      state: "completed",
-      current: currentFile,
-      passed: run.passed ? [currentFile] : [],
-      locked: [],
-      total: tests.length,
-      next: run.passed ? nextFile : currentFile,
-      test: {
-        file: currentFile,
-        passed: run.passed,
-        exitCode: run.exitCode,
-        stdout,
-        stderr,
-        errorMessage: run.passed ? "" : firstUsefulLine(stderr) || firstUsefulLine(stdout) || "Test failed",
-      },
-    });
-  }
-
-  async function startProjectRun() {
-    if (isRunning) return;
-    isRunning = true;
+    const runningPayload = makeRunningPayload(currentFile, tests, nextFile);
+    writeResultFile(runningPayload);
 
     try {
-      const runningPayload = whoIsAndWhere(
-        addStats({
-          state: "running",
-          current: null,
-          passed: [],
-          locked: [],
-          total: getAllTests().length,
-          next: null,
-          test: {
-            file: null,
-            passed: false,
-            exitCode: null,
-            stdout: "",
-            stderr: "",
-            errorMessage: "",
-          },
-        })
-      );
-
-      writeResultFile(runningPayload);
-
-      const finalResult = whoIsAndWhere(await getResultProjectMode());
-      writeResultFile(finalResult);
+      const abs = path.join(TEST_DIR, currentFile);
+      const run = await runMochaInChild(abs);
+      const finalPayload = makeFinalPayload({ currentFile, tests, nextFile, run });
+      writeResultFile(finalPayload);
     } catch (err) {
-      const failedPayload = whoIsAndWhere(
-        addStats({
-          state: "failed",
-          current: null,
-          passed: [],
-          locked: [],
-          total: getAllTests().length,
-          next: null,
-          test: {
-            file: null,
-            passed: false,
-            exitCode: 1,
-            stdout: "",
-            stderr: String(err?.stack || err?.message || err),
-            errorMessage: String(err?.message || err),
-          },
-        })
-      );
-
-      writeResultFile(failedPayload);
+      writeResultFile(makeFailedPayload(currentFile, tests, err));
     } finally {
-      isRunning = false;
+      runPromise = null;
     }
   }
 
-  app.get("/result", (req, res) => {
+  app.get("/result", async (req, res) => {
     try {
       const existing = readResultFile();
 
-      if (existing?.state === "running") {
+      if (existing) {
+        if (existing.state === "running" && !runPromise) {
+          runPromise = startBackgroundRun();
+        }
         return res.json(existing);
       }
 
-      if (existing?.state === "completed" || existing?.state === "failed") {
-        removeResultFile();
+      const tests = getAllTests();
+      if (tests.length === 0) {
+        const payload = whoIsAndWhere(
+          addStats({
+            state: "failed",
+            current: null,
+            passed: [],
+            locked: [],
+            total: 0,
+            next: null,
+            test: {
+              file: null,
+              passed: false,
+              exitCode: null,
+              stdout: "",
+              stderr: "",
+              errorMessage: "No test files found in /test",
+            },
+          })
+        );
+        writeResultFile(payload);
+        return res.json(payload);
       }
 
-      const runningPayload = whoIsAndWhere(
-        addStats({
-          state: "running",
-          current: null,
-          passed: [],
-          locked: [],
-          total: getAllTests().length,
-          next: null,
-          test: {
-            file: null,
-            passed: false,
-            exitCode: null,
-            stdout: "",
-            stderr: "",
-            errorMessage: "",
-          },
-        })
-      );
+      if (!runPromise) {
+        runPromise = startBackgroundRun();
+      }
 
-      writeResultFile(runningPayload);
-      startProjectRun();
-
-      return res.json(runningPayload);
+      const initialPayload = readResultFile() || makeRunningPayload(tests[0].file, tests, tests[1]?.file || null);
+      return res.json(initialPayload);
     } catch (err) {
-      return res.status(500).json({
+      res.status(500).json({
         error: "Failed to read progress (project mode)",
         message: err.message,
       });
     }
   });
 
+  app.get("/result/reset", (req, res) => {
+    runPromise = null;
+    removeResultFile();
+    res.json({ ok: true, message: "result.json removed" });
+  });
+
   app.listen(PORT, "0.0.0.0", () => {
-    console.log("📦 Project mode server (result.json + async runner)");
+    console.log("📦 Project mode server (result.json polling mode)");
     if (TEST_MODE) console.log("🧪 --test enabled (project) → /result returns all passed");
     console.log(`🚀 Project server running on port ${PORT}`);
   });
