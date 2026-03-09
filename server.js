@@ -156,6 +156,25 @@ function firstUsefulLine(text) {
  * - Uses `npx mocha <testFile>`
  * - Returns stdout/stderr/exit code to include in JSON
  */
+const RESULT_FILE = path.join(process.cwd(), "result.json");
+
+function writeResultFile(data) {
+  try {
+    fs.writeFileSync(RESULT_FILE, JSON.stringify(data, null, 2));
+  } catch (err) {
+    console.error("Failed to write result.json:", err.message);
+  }
+}
+
+function readResultFile() {
+  try {
+    if (!fs.existsSync(RESULT_FILE)) return null;
+    return JSON.parse(fs.readFileSync(RESULT_FILE, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
 function runMochaInChild(testFileAbsPath) {
   return new Promise((resolve) => {
     const cmd = process.platform === "win32" ? "npx.cmd" : "npx";
@@ -439,3 +458,4 @@ function startProjectServer() {
 // ----------------------------
 if (PROJECT_MODE) startProjectServer();
 else startNormalServer();
+
