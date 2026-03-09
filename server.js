@@ -23,6 +23,7 @@ const { execSync } = require("child_process");
 const PORT = process.env.PORT || 3000;
 const TEST_DIR = path.join(__dirname, "test");
 const MOCHA_RC = path.join(__dirname, ".mocharc.json");
+const RESULT_FILE = path.join(__dirname, "result.json");
 
 const TEST_MODE = process.argv.includes("--test");
 const PROJECT_MODE = process.argv.includes("--project");
@@ -223,6 +224,7 @@ function startNormalServer() {
     }
 
     return addStats({
+      state: "completed",
       current: currentFile,
       passed,
       locked,
@@ -270,11 +272,37 @@ function startProjectServer() {
   const app = express();
   attachCommonMiddleware(app);
 
+  let isRunning = false;
+  let activeRunPromise = null;
+
+  function buildRunningResult(tests) {
+    const currentFile = tests.length ? tests[0].file : null;
+    const nextFile = tests.length > 1 ? tests[1].file : null;
+
+    return addStats({
+      state: "running",
+      current: currentFile,
+      passed: [],
+      locked: [],
+      total: tests.length,
+      next: nextFile,
+      test: {
+        file: currentFile,
+        passed: false,
+        exitCode: null,
+        stdout: "",
+        stderr: "",
+        errorMessage: "Tests are still running",
+      },
+    });
+  }
+
   async function getResultProjectMode() {
     const tests = getAllTests();
 
     if (tests.length === 0) {
       return addStats({
+        state: "completed",
         current: null,
         passed: [],
         locked: [],
@@ -343,8 +371,54 @@ function startProjectServer() {
 
   app.get("/result", async (req, res) => {
     try {
-      const result = await getResultProjectMode();
-      res.json(whoIsAndWhere(result));
+      const tests = getAllTests();
+
+      if (!isRunning) {
+        isRunning = true;
+
+        const runningPayload = whoIsAndWhere(buildRunningResult(tests));
+        writeResultFile(runningPayload);
+
+        activeRunPromise = getResultProjectMode()
+          .then((result) => {
+            const finalPayload = whoIsAndWhere(result);
+            writeResultFile(finalPayload);
+            return finalPayload;
+          })
+          .catch((err) => {
+            const failedPayload = whoIsAndWhere({
+              state: "failed",
+              current: tests[0]?.file || null,
+              passed: [],
+              locked: [],
+              total: tests.length,
+              next: tests[0]?.file || null,
+              test: {
+                file: tests[0]?.file || null,
+                passed: false,
+                exitCode: 1,
+                stdout: "",
+                stderr: "",
+                errorMessage: err.message,
+              },
+            });
+            writeResultFile(failedPayload);
+            return failedPayload;
+          })
+          .finally(() => {
+            isRunning = false;
+            activeRunPromise = null;
+          });
+
+        return res.json(runningPayload);
+      }
+
+      const cached = readResultFile();
+      if (cached) {
+        return res.json(cached);
+      }
+
+      res.json(whoIsAndWhere(buildRunningResult(tests)));
     } catch (err) {
       res.status(500).json({
         error: "Failed to read progress (project mode)",
@@ -365,12 +439,3 @@ function startProjectServer() {
 // ----------------------------
 if (PROJECT_MODE) startProjectServer();
 else startNormalServer();
-
-
-
-
-
-
-
-
-
