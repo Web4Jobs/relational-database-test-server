@@ -1,28 +1,8 @@
-/**
- * server.js (single file)
- *
- * Modes:
- *   node server.js                 -> NORMAL (reads .mocharc.json)
- *   node server.js --project       -> PROJECT (runs current test in child process)
- *   node server.js --test          -> force "all passed" (works in both)
- *   node server.js --project --test -> project + force pass
- *
- * PROJECT MODE:
- *   - first /result call creates result.json with state: "running"
- *   - responds immediately with that file content
- *   - mocha continues in background
- *   - when finished, result.json is replaced with final payload
- *   - later /result calls just serve result.json
- */
-
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
 const { spawn, execSync } = require("child_process");
 
-// ----------------------------
-// Shared config + flags
-// ----------------------------
 const PORT = process.env.PORT || 3000;
 const TEST_DIR = path.join(__dirname, "test");
 const MOCHA_RC = path.join(__dirname, ".mocharc.json");
@@ -32,9 +12,6 @@ const TEST_MODE = process.argv.includes("--test");
 const PROJECT_MODE = process.argv.includes("--project");
 const TEST_MAIL = process.argv.includes("--testmail");
 
-// ----------------------------
-// Challenges
-// ----------------------------
 function getFlagValue(flag) {
   const i = process.argv.indexOf(flag);
   if (i === -1) return null;
@@ -59,7 +36,7 @@ const CHALLENGES = [
   { name: "Learn Nano by Building a Castle", uuid: "v7W", order: 11 },
   { name: "Learn Git by Building an SQL Reference Object", uuid: "x2Y", order: 12 },
   { name: "Periodic Table Database", uuid: "z9A", order: 13 },
-  { name: "Number Guessing Game", uuid: "b3C", order: 14 }
+  { name: "Number Guessing Game", uuid: "b3C", order: 14 },
 ];
 
 const SELECTED_CHALLENGE = REQUESTED_ID
@@ -68,12 +45,13 @@ const SELECTED_CHALLENGE = REQUESTED_ID
 
 function whoIsAndWhere(payload) {
   let email = "";
+
   if (TEST_MAIL) {
     email = "fagroudfatimazahra0512@gmail.com";
   } else {
     try {
       email = execSync("git config --get user.email", { encoding: "utf8" }).trim();
-    } catch (e) {
+    } catch {
       email = "";
     }
   }
@@ -85,9 +63,6 @@ function whoIsAndWhere(payload) {
   };
 }
 
-// ----------------------------
-// Shared utilities
-// ----------------------------
 function attachCommonMiddleware(app) {
   app.use((req, res, next) => {
     res.header("Access-Control-Allow-Origin", "*");
@@ -138,7 +113,9 @@ function addStats(payload) {
 
 function truncate(str, max = 6000) {
   if (!str) return "";
-  return str.length > max ? str.slice(0, max) + `\n... (truncated ${str.length - max} chars)` : str;
+  return str.length > max
+    ? str.slice(0, max) + `\n... (truncated ${str.length - max} chars)`
+    : str;
 }
 
 function firstUsefulLine(text) {
@@ -150,145 +127,133 @@ function firstUsefulLine(text) {
   return lines[0] || "";
 }
 
-function writeResultFile(data) {
+function safeWriteJson(filePath, data) {
   try {
-    fs.writeFileSync(RESULT_FILE, JSON.stringify(data, null, 2), "utf8");
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8");
   } catch (err) {
-    console.error("Failed to write result.json:", err.message);
+    console.error("Failed to write JSON:", err.message);
   }
 }
 
-function readResultFile() {
+function safeReadJson(filePath, fallback = {}) {
   try {
-    if (!fs.existsSync(RESULT_FILE)) return null;
-    return JSON.parse(fs.readFileSync(RESULT_FILE, "utf8"));
+    if (!fs.existsSync(filePath)) return fallback;
+    return JSON.parse(fs.readFileSync(filePath, "utf8"));
   } catch (err) {
-    console.error("Failed to read result.json:", err.message);
-    return null;
+    console.error("Failed to read JSON:", err.message);
+    return fallback;
   }
 }
 
-function removeResultFile() {
-  try {
-    if (fs.existsSync(RESULT_FILE)) fs.unlinkSync(RESULT_FILE);
-  } catch (err) {
-    console.error("Failed to remove result.json:", err.message);
-  }
-}
-
-function makeRunningPayload(currentFile, tests, nextFile) {
+function buildProjectPayload(base = {}) {
   return whoIsAndWhere(
     addStats({
-      state: "running",
-      current: currentFile,
+      state: "finished",
+      current: null,
       passed: [],
       locked: [],
-      total: tests.length,
-      next: currentFile,
+      total: 0,
+      next: null,
       test: {
-        file: currentFile,
+        file: null,
         passed: false,
         exitCode: null,
         stdout: "",
         stderr: "",
-        errorMessage: "Test is still running",
+        errorMessage: "",
       },
+      ...base,
     })
   );
 }
 
-function makeFinalPayload({ currentFile, tests, nextFile, run }) {
-  const stdout = truncate(run.stdout);
-  const stderr = truncate(run.stderr);
-
-  return whoIsAndWhere(
-    addStats({
-      state: "completed",
-      current: currentFile,
-      passed: run.passed ? [currentFile] : [],
-      locked: [],
-      total: tests.length,
-      next: run.passed ? nextFile : currentFile,
+function readResultFile() {
+  return safeReadJson(
+    RESULT_FILE,
+    buildProjectPayload({
+      state: "finished",
       test: {
-        file: currentFile,
-        passed: run.passed,
-        exitCode: run.exitCode,
-        stdout,
-        stderr,
-        errorMessage: run.passed
-          ? ""
-          : firstUsefulLine(stderr) || firstUsefulLine(stdout) || "Test failed",
-      },
-    })
-  );
-}
-
-function makeFailedPayload(currentFile, tests, err) {
-  return whoIsAndWhere(
-    addStats({
-      state: "failed",
-      current: currentFile,
-      passed: [],
-      locked: [],
-      total: tests.length,
-      next: currentFile,
-      test: {
-        file: currentFile,
+        file: null,
         passed: false,
-        exitCode: 1,
+        exitCode: null,
         stdout: "",
-        stderr: String(err?.stack || err?.message || err || "Unknown error"),
-        errorMessage: String(err?.message || err || "Unknown error"),
+        stderr: "",
+        errorMessage: "",
       },
     })
   );
+}
+
+function writeResultFile(payload) {
+  safeWriteJson(RESULT_FILE, payload);
 }
 
 function runMochaInChild(testFileAbsPath) {
   return new Promise((resolve) => {
-    const cmd = process.platform === "win32" ? "npx.cmd" : "npx";
-    const args = ["mocha", testFileAbsPath];
+    try {
+      const cmd = process.platform === "win32" ? "npx.cmd" : "npx";
+      const args = ["mocha", testFileAbsPath];
 
-    const proc = spawn(cmd, args, {
-      cwd: __dirname,
-      env: process.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    let stdout = "";
-    let stderr = "";
-
-    proc.stdout.on("data", (d) => {
-      stdout += d.toString();
-    });
-
-    proc.stderr.on("data", (d) => {
-      stderr += d.toString();
-    });
-
-    proc.on("close", (code) => {
-      resolve({
-        passed: code === 0,
-        exitCode: code,
-        stdout,
-        stderr,
+      const proc = spawn(cmd, args, {
+        cwd: __dirname,
+        env: process.env,
+        stdio: ["ignore", "pipe", "pipe"],
       });
-    });
 
-    proc.on("error", (err) => {
+      let stdout = "";
+      let stderr = "";
+      let settled = false;
+
+      const done = (result) => {
+        if (settled) return;
+        settled = true;
+        resolve(result);
+      };
+
+      proc.stdout.on("data", (d) => {
+        try {
+          stdout += d.toString();
+        } catch (err) {
+          stderr += `\nstdout read error: ${err.message}`;
+        }
+      });
+
+      proc.stderr.on("data", (d) => {
+        try {
+          stderr += d.toString();
+        } catch (err) {
+          stderr += `\nstderr read error: ${err.message}`;
+        }
+      });
+
+      proc.on("close", (code) => {
+        done({
+          passed: code === 0,
+          exitCode: code,
+          stdout,
+          stderr,
+        });
+      });
+
+      proc.on("error", (err) => {
+        done({
+          passed: false,
+          exitCode: 1,
+          stdout,
+          stderr: (stderr ? stderr + "\n" : "") + String(err?.stack || err?.message || err),
+        });
+      });
+    } catch (err) {
       resolve({
         passed: false,
         exitCode: 1,
-        stdout,
-        stderr: (stderr ? stderr + "\n" : "") + String(err?.message || err),
+        stdout: "",
+        stderr: String(err?.stack || err?.message || err),
       });
-    });
+    }
   });
 }
 
-// ----------------------------
-// NORMAL MODE implementation
-// ----------------------------
 function startNormalServer() {
   const app = express();
   attachCommonMiddleware(app);
@@ -300,6 +265,7 @@ function startNormalServer() {
 
     const mocha = JSON.parse(fs.readFileSync(MOCHA_RC, "utf8"));
     const currentSpec = Array.isArray(mocha.spec) ? mocha.spec[0] : null;
+
     if (!currentSpec) {
       throw new Error('Invalid ".mocharc.json": expected { "spec": ["./test/X.test.js"] }.');
     }
@@ -316,16 +282,13 @@ function startNormalServer() {
       if (t.step > currentStep) locked.push(t.file);
     }
 
-    return whoIsAndWhere(
-      addStats({
-        state: "completed",
-        current: currentFile,
-        passed,
-        locked,
-        total: tests.length,
-        next: locked[0] || "Congrats on completing this Challenge, no more test",
-      })
-    );
+    return addStats({
+      current: currentFile,
+      passed,
+      locked,
+      total: tests.length,
+      next: locked[0] || "Congrats on completing this Challenge, no more test",
+    });
   }
 
   function getResultTestMode() {
@@ -333,22 +296,19 @@ function startNormalServer() {
     const passed = tests.map((t) => t.file);
     const currentFile = tests.length ? tests[tests.length - 1].file : null;
 
-    return whoIsAndWhere(
-      addStats({
-        state: "completed",
-        current: currentFile,
-        passed,
-        locked: [],
-        total: tests.length,
-        next: null,
-      })
-    );
+    return addStats({
+      current: currentFile,
+      passed,
+      locked: [],
+      total: tests.length,
+      next: null,
+    });
   }
 
   app.get("/result", (req, res) => {
     try {
       const result = TEST_MODE ? getResultTestMode() : getResultNormal();
-      res.json(result);
+      res.json(whoIsAndWhere(result));
     } catch (err) {
       res.status(500).json({
         error: "Failed to read progress (normal mode)",
@@ -358,43 +318,34 @@ function startNormalServer() {
   });
 
   app.listen(PORT, "0.0.0.0", () => {
-    if (TEST_MODE) console.log("🧪 --test enabled (normal) → /result returns all passed");
     console.log(`🚀 Normal server running on port ${PORT}`);
   });
 }
 
-// ----------------------------
-// PROJECT MODE implementation
-// ----------------------------
-function startProjectServer() {
-  const app = express();
-  attachCommonMiddleware(app);
+let isProjectRunInProgress = false;
 
-  let runPromise = null;
+async function startProjectRun() {
+  if (isProjectRunInProgress) return;
 
-  async function startBackgroundRun() {
+  isProjectRunInProgress = true;
+
+  try {
     const tests = getAllTests();
 
     if (tests.length === 0) {
       writeResultFile(
-        whoIsAndWhere(
-          addStats({
-            state: "failed",
-            current: null,
-            passed: [],
-            locked: [],
-            total: 0,
-            next: null,
-            test: {
-              file: null,
-              passed: false,
-              exitCode: null,
-              stdout: "",
-              stderr: "",
-              errorMessage: "No test files found in /test",
-            },
-          })
-        )
+        buildProjectPayload({
+          state: "finished",
+          total: 0,
+          test: {
+            file: null,
+            passed: false,
+            exitCode: null,
+            stdout: "",
+            stderr: "",
+            errorMessage: "No test files found in /test",
+          },
+        })
       );
       return;
     }
@@ -402,110 +353,209 @@ function startProjectServer() {
     const currentFile = tests[0].file;
     const nextFile = tests.length > 1 ? tests[1].file : null;
 
+    writeResultFile(
+      buildProjectPayload({
+        state: "running",
+        current: currentFile,
+        passed: [],
+        locked: [],
+        total: tests.length,
+        next: currentFile,
+        test: {
+          file: currentFile,
+          passed: false,
+          exitCode: null,
+          stdout: "",
+          stderr: "",
+          errorMessage: "",
+        },
+      })
+    );
+
     if (TEST_MODE) {
       writeResultFile(
-        whoIsAndWhere(
-          addStats({
-            state: "completed",
-            current: currentFile,
-            passed: tests.map((t) => t.file),
-            locked: [],
-            total: tests.length,
-            next: null,
-            test: {
-              file: currentFile,
-              passed: true,
-              exitCode: 0,
-              stdout: "",
-              stderr: "",
-              errorMessage: "",
-              forced: true,
-            },
-          })
-        )
+        buildProjectPayload({
+          state: "finished",
+          current: currentFile,
+          passed: tests.map((t) => t.file),
+          locked: [],
+          total: tests.length,
+          next: null,
+          test: {
+            file: currentFile,
+            passed: true,
+            exitCode: 0,
+            stdout: "",
+            stderr: "",
+            errorMessage: "",
+            forced: true,
+          },
+        })
       );
       return;
     }
 
-    const runningPayload = makeRunningPayload(currentFile, tests, nextFile);
-    writeResultFile(runningPayload);
+    const abs = path.join(TEST_DIR, currentFile);
+    const run = await runMochaInChild(abs);
 
-    try {
-      const abs = path.join(TEST_DIR, currentFile);
-      const run = await runMochaInChild(abs);
-      const finalPayload = makeFinalPayload({ currentFile, tests, nextFile, run });
-      writeResultFile(finalPayload);
-    } catch (err) {
-      writeResultFile(makeFailedPayload(currentFile, tests, err));
-    } finally {
-      runPromise = null;
-    }
+    const stdout = truncate(run.stdout);
+    const stderr = truncate(run.stderr);
+
+    writeResultFile(
+      buildProjectPayload({
+        state: "finished",
+        current: currentFile,
+        passed: run.passed ? [currentFile] : [],
+        locked: [],
+        total: tests.length,
+        next: run.passed ? nextFile : currentFile,
+        test: {
+          file: currentFile,
+          passed: run.passed,
+          exitCode: run.exitCode,
+          stdout,
+          stderr,
+          errorMessage:
+            run.passed
+              ? ""
+              : firstUsefulLine(stderr) || firstUsefulLine(stdout) || "Test failed",
+        },
+      })
+    );
+  } catch (err) {
+    const current = readResultFile();
+
+    writeResultFile(
+      buildProjectPayload({
+        ...current,
+        state: "finished",
+        test: {
+          ...(current.test || {}),
+          passed: false,
+          exitCode: 1,
+          stdout: current?.test?.stdout || "",
+          stderr: truncate(
+            (current?.test?.stderr ? current.test.stderr + "\n" : "") +
+              String(err?.stack || err?.message || err)
+          ),
+          errorMessage: String(err?.message || err),
+        },
+      })
+    );
+  } finally {
+    isProjectRunInProgress = false;
+  }
+}
+
+function startProjectServer() {
+  const app = express();
+  attachCommonMiddleware(app);
+
+  if (!fs.existsSync(RESULT_FILE)) {
+    writeResultFile(
+      buildProjectPayload({
+        state: "finished",
+        current: null,
+        passed: [],
+        locked: [],
+        total: 0,
+        next: null,
+      })
+    );
   }
 
-  app.get("/result", async (req, res) => {
+  app.get("/result", (req, res) => {
     try {
-      const existing = readResultFile();
+      const currentResult = readResultFile();
 
-      if (existing) {
-        if (existing.state === "running" && !runPromise) {
-          runPromise = startBackgroundRun();
-        }
-        return res.json(existing);
+      // always return current file as-is
+      res.status(200).json(currentResult);
+
+      // after responding, launch a new run only if not already running
+      if (!isProjectRunInProgress) {
+        setImmediate(() => {
+          startProjectRun().catch((err) => {
+            const current = readResultFile();
+            writeResultFile(
+              buildProjectPayload({
+                ...current,
+                state: "finished",
+                test: {
+                  ...(current.test || {}),
+                  passed: false,
+                  exitCode: 1,
+                  stdout: current?.test?.stdout || "",
+                  stderr: truncate(
+                    (current?.test?.stderr ? current.test.stderr + "\n" : "") +
+                      String(err?.stack || err?.message || err)
+                  ),
+                  errorMessage: String(err?.message || err),
+                },
+              })
+            );
+          });
+        });
       }
-
-      const tests = getAllTests();
-      if (tests.length === 0) {
-        const payload = whoIsAndWhere(
-          addStats({
-            state: "failed",
-            current: null,
-            passed: [],
-            locked: [],
-            total: 0,
-            next: null,
-            test: {
-              file: null,
-              passed: false,
-              exitCode: null,
-              stdout: "",
-              stderr: "",
-              errorMessage: "No test files found in /test",
-            },
-          })
-        );
-        writeResultFile(payload);
-        return res.json(payload);
-      }
-
-      if (!runPromise) {
-        runPromise = startBackgroundRun();
-      }
-
-      const initialPayload = readResultFile() || makeRunningPayload(tests[0].file, tests, tests[1]?.file || null);
-      return res.json(initialPayload);
     } catch (err) {
-      res.status(500).json({
-        error: "Failed to read progress (project mode)",
+      return res.status(500).json({
+        error: "Failed to read result.json (project mode)",
         message: err.message,
       });
     }
   });
 
-  app.get("/result/reset", (req, res) => {
-    runPromise = null;
-    removeResultFile();
-    res.json({ ok: true, message: "result.json removed" });
-  });
-
   app.listen(PORT, "0.0.0.0", () => {
-    console.log("📦 Project mode server (result.json polling mode)");
-    if (TEST_MODE) console.log("🧪 --test enabled (project) → /result returns all passed");
     console.log(`🚀 Project server running on port ${PORT}`);
   });
 }
 
-// ----------------------------
-// Entry point
-// ----------------------------
+process.on("uncaughtException", (err) => {
+  console.error("uncaughtException:", err);
+  if (PROJECT_MODE) {
+    const current = readResultFile();
+    writeResultFile(
+      buildProjectPayload({
+        ...current,
+        state: "finished",
+        test: {
+          ...(current.test || {}),
+          passed: false,
+          exitCode: 1,
+          stdout: current?.test?.stdout || "",
+          stderr: truncate(
+            (current?.test?.stderr ? current.test.stderr + "\n" : "") +
+              String(err?.stack || err?.message || err)
+          ),
+          errorMessage: String(err?.message || err),
+        },
+      })
+    );
+  }
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("unhandledRejection:", reason);
+  if (PROJECT_MODE) {
+    const current = readResultFile();
+    writeResultFile(
+      buildProjectPayload({
+        ...current,
+        state: "finished",
+        test: {
+          ...(current.test || {}),
+          passed: false,
+          exitCode: 1,
+          stdout: current?.test?.stdout || "",
+          stderr: truncate(
+            (current?.test?.stderr ? current.test.stderr + "\n" : "") +
+              String(reason?.stack || reason?.message || reason)
+          ),
+          errorMessage: String(reason?.message || reason),
+        },
+      })
+    );
+  }
+});
+
 if (PROJECT_MODE) startProjectServer();
 else startNormalServer();
